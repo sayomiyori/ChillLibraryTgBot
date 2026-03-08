@@ -1,0 +1,27 @@
+# Секреты и локальные данные (не попадают в образ)
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.sqlite
+secrets/
+debug_*.html
+errors_log.txt
+
+# Git и IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/

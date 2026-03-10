@@ -32,9 +32,11 @@ build/
 *.swo
 *~
 
-# Отладочные артефакты (не выгружать)
+# Отладочные артефакты и личные заметки (не выгружать)
 debug_*.html
 errors_log.txt
+TASKS.md
+PORTFOLIO.md
 
 # Тесты и кэш
 .pytest_cache/

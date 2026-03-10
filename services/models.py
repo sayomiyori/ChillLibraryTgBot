@@ -27,4 +27,5 @@ class BookInfo:
             "categories": self.categories,
             "genre": ", ".join(self.categories) if self.categories else "",
             "year": self.year,
+            "preview_link": self.preview_link,
         }

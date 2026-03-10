@@ -13,6 +13,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")       # Google Books API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")      # Gemini — рекомендации, цитаты, обложки
 GOOGLE_VISION_KEY = os.getenv("GOOGLE_VISION_KEY", "")  # Vision API — распознавание обложек
 GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX", "")  # Google Custom Search Engine ID (fallback поиска файлов)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # Groq — извлечение title/author из OCR обложки
 
 MAX_SEARCH_RESULTS = 10
 MAX_RECOMMENDATIONS = 5

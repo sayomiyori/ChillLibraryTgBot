@@ -210,7 +210,14 @@ async def _parse_source(
     if not html:
         status_str = str(status) if status else "—"
         err_str = (err or "—").strip()[:80]
-        logger.warning("[%s] ❌ страница не загрузилась | status=%s | %s | %s", source_name, status_str, err_str, url[:50])
+        # Без emoji, чтобы не падать на консольной кодировке cp1251 в Windows
+        logger.warning(
+            "[%s] ERROR страница не загрузилась | status=%s | %s | %s",
+            source_name,
+            status_str,
+            err_str,
+            url[:50],
+        )
         return None
     debug_path = f"debug_{source_name}.html"
     try:
@@ -227,7 +234,7 @@ async def _parse_source(
     for selector in config.get("selectors", []):
         elements = soup.select(selector)
         if not elements:
-            logger.warning("[%s] ❌ селектор '%s' не найден", source_name, selector)
+            logger.warning("[%s] selector '%s' не найден", source_name, selector)
             continue
         for el in elements:
             href = el.get("href", "").strip()
@@ -250,7 +257,11 @@ async def _parse_source(
                     href = base.rstrip("/") + "/" + href.lstrip("/")
                 logger.info("[%s] селектор '%s' score=%s -> %s", source_name, selector, score, href[:60])
                 return href
-        logger.warning("[%s] ❌ селектор '%s' найден, но ни одна ссылка не подошла по тексту", source_name, selector)
+        logger.warning(
+            "[%s] selector '%s' найден, но ни одна ссылка не подошла по тексту",
+            source_name,
+            selector,
+        )
     all_links = soup.find_all("a", href=True)
     logger.info("[%s] всего ссылок на странице: %s", source_name, len(all_links))
     for a in all_links[:20]:
@@ -269,7 +280,12 @@ async def _smart_parse(
     html, status, err = await _fetch_html(session, url)
     if not html:
         status_str = str(status) if status else "—"
-        logger.warning("[%s] ❌ smart_parse: нет HTML | status=%s | %s", source_name, status_str, (err or "—")[:60])
+        logger.warning(
+            "[%s] smart_parse: нет HTML | status=%s | %s",
+            source_name,
+            status_str,
+            (err or "—")[:60],
+        )
         return None
     soup = BeautifulSoup(html, "lxml")
     query_lower = query.lower()
@@ -386,7 +402,12 @@ async def search_zlib(
     url = f"https://z-lib.gs/search?q={query_encoded}&extension={fmt}"
     html, status, err = await _fetch_html(session, url)
     if not html:
-        logger.warning("[%s] z-lib.gs → ❌ нет ответа | status=%s | %s", fmt.upper(), status, (err or "—")[:60])
+        logger.warning(
+            "[%s] z-lib.gs → нет ответа | status=%s | %s",
+            fmt.upper(),
+            status,
+            (err or "—")[:60],
+        )
         return None
     soup = BeautifulSoup(html, "lxml")
     selectors = [
@@ -402,16 +423,16 @@ async def search_zlib(
             href = el["href"]
             if not href.startswith("http"):
                 href = "https://z-lib.gs" + href
-            logger.info("[%s] z-lib.gs → ✅ найдено: %s", fmt.upper(), href[:60])
+            logger.info("[%s] z-lib.gs найдено: %s", fmt.upper(), href[:60])
             return href
     for a in soup.find_all("a", href=True):
         if "/book/" in a["href"]:
             href = a["href"]
             if not href.startswith("http"):
                 href = "https://z-lib.gs" + href
-            logger.info("[%s] z-lib.gs → ✅ найдено: %s", fmt.upper(), href[:60])
+            logger.info("[%s] z-lib.gs найдено: %s", fmt.upper(), href[:60])
             return href
-    logger.warning("[%s] z-lib.gs → ❌ не найдено для '%s'", fmt.upper(), query[:40])
+    logger.warning("[%s] z-lib.gs → не найдено для '%s'", fmt.upper(), query[:40])
     return None
 
 
@@ -432,7 +453,7 @@ async def search_archive_org(
     )
     data = await _fetch_json(session, api_url)
     if not data:
-        logger.warning("[%s] archive.org → ❌ нет ответа", format)
+        logger.warning("[%s] archive.org → нет ответа", format)
         return None
     docs = data.get("response", {}).get("docs", [])
     for doc in docs:
@@ -449,9 +470,9 @@ async def search_archive_org(
             if fname.lower().endswith(f".{(format or '').lower()}"):
                 fname_enc = quote(fname, safe="")
                 link = f"https://archive.org/download/{identifier}/{fname_enc}"
-                logger.info("[%s] archive.org → ✅ %s", format, link[:60])
+                logger.info("[%s] archive.org найдено: %s", format, link[:60])
                 return link
-    logger.warning("[%s] archive.org → ❌ не найдено", format)
+    logger.warning("[%s] archive.org → не найдено", format)
     return None
 
 
@@ -475,7 +496,7 @@ async def search_openlibrary(
             formats_available = edition.get("formats", {}) or {}
             if (format or "").lower() in str(formats_available).lower():
                 link = f"https://openlibrary.org/books/{key}"
-                logger.info("[%s] openlibrary → ✅ %s", format, link[:60])
+                logger.info("[%s] openlibrary найдено: %s", format, link[:60])
                 return link
     return None
 
@@ -486,7 +507,11 @@ async def search_gutenberg(session: aiohttp.ClientSession, query: str) -> Option
     api = f"https://www.gutenberg.org/ebooks/search/?query={query_encoded}&submit_search=Go"
     html, status, err = await _fetch_html(session, api)
     if not html:
-        logger.warning("[EPUB] gutenberg → ❌ нет ответа | status=%s | %s", status, (err or "—")[:60])
+        logger.warning(
+            "[EPUB] gutenberg → нет ответа | status=%s | %s",
+            status,
+            (err or "—")[:60],
+        )
         return None
     soup = BeautifulSoup(html, "lxml")
     book_link = soup.select_one("li.booklink a, .result-set li a")
@@ -497,7 +522,7 @@ async def search_gutenberg(session: aiohttp.ClientSession, query: str) -> Option
     if not book_id.isdigit():
         return None
     epub_url = f"https://www.gutenberg.org/ebooks/{book_id}.epub.images"
-    logger.info("[EPUB] gutenberg → ✅ %s", epub_url)
+    logger.info("[EPUB] gutenberg найдено: %s", epub_url)
     return epub_url
 
 
@@ -507,7 +532,11 @@ async def search_knigavuhe(session: aiohttp.ClientSession, query: str) -> Option
     url = f"https://knigavuhe.org/search/?q={query_encoded}"
     html, status, err = await _fetch_html(session, url)
     if not html:
-        logger.warning("[Аудио] knigavuhe → ❌ нет ответа | status=%s | %s", status, (err or "—")[:60])
+        logger.warning(
+            "[Аудио] knigavuhe → нет ответа | status=%s | %s",
+            status,
+            (err or "—")[:60],
+        )
         return None
     soup = BeautifulSoup(html, "lxml")
     for sel in (".kniga-title a", ".book-title a", ".search-result a", "h2 a", "h3 a"):
@@ -516,7 +545,7 @@ async def search_knigavuhe(session: aiohttp.ClientSession, query: str) -> Option
             href = el["href"]
             if not href.startswith("http"):
                 href = "https://knigavuhe.org" + href
-            logger.info("[Аудио] knigavuhe → ✅ %s", href[:60])
+            logger.info("[Аудио] knigavuhe найдено: %s", href[:60])
             return href
     return None
 
@@ -527,7 +556,11 @@ async def search_akniga(session: aiohttp.ClientSession, query: str) -> Optional[
     url = f"https://akniga.org/search/q/{query_encoded}/"
     html, status, err = await _fetch_html(session, url)
     if not html:
-        logger.warning("[Аудио] akniga → ❌ нет ответа | status=%s | %s", status, (err or "—")[:60])
+        logger.warning(
+            "[Аудио] akniga → нет ответа | status=%s | %s",
+            status,
+            (err or "—")[:60],
+        )
         return None
     soup = BeautifulSoup(html, "lxml")
     el = soup.select_one(".desc--title a, .book-title a, h2.title a")
@@ -535,7 +568,7 @@ async def search_akniga(session: aiohttp.ClientSession, query: str) -> Optional[
         href = el["href"]
         if not href.startswith("http"):
             href = "https://akniga.org" + href
-        logger.info("[Аудио] akniga → ✅ %s", href[:60])
+        logger.info("[Аудио] akniga найдено: %s", href[:60])
         return href
     return None
 
@@ -551,7 +584,7 @@ async def search_librivox(session: aiohttp.ClientSession, query: str) -> Optiona
     if books:
         url = books[0].get("url_zip_file") or books[0].get("url_rss_feed")
         if url:
-            logger.info("[Аудио] librivox → ✅ %s", url[:60])
+            logger.info("[Аудио] librivox найдено: %s", url[:60])
             return url
     return None
 
@@ -575,7 +608,7 @@ async def search_google_books(session: aiohttp.ClientSession, query: str) -> Opt
         pdf = acc.get("pdf") or {}
         link = pdf.get("acsTokenLink") or pdf.get("downloadLink")
         if link and isinstance(link, str) and link.startswith("http"):
-            logger.info("[PDF] Google Books → ✅ %s", link[:60])
+            logger.info("[PDF] Google Books найдено: %s", link[:60])
             return link
     return None
 

@@ -7,5 +7,7 @@ rapidfuzz>=3.0.0
 google-generativeai>=0.8.0
 lxml>=5.0.0
 beautifulsoup4>=4.12.0
-transliterate>=1.10.0
+transliterate==1.10.2
 libgen-api>=1.0.0
+chrome-lens-py>=3.3.0
+groq>=0.4.0

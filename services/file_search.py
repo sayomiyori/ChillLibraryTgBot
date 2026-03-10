@@ -50,13 +50,13 @@ async def _validate_content(
     logger.info("[VERIFY] качаем 8KB → проверяем метаданные...")
     chunk = await _fetch_first_chunk(session, url)
     if not chunk or len(chunk) < 50:
-        logger.warning("[VERIFY] ❌ не удалось прочитать начало файла")
+        logger.warning("[VERIFY] не удалось прочитать начало файла")
         return False
     ok = await verify_chunk(chunk, title, author, fmt, session)
     if ok:
-        logger.info("[VERIFY] ✅ содержимое совпадает (title/author)")
+        logger.info("[VERIFY] содержимое совпадает (title/author)")
     else:
-        logger.warning("[VERIFY] ❌ содержимое не совпадает")
+        logger.warning("[VERIFY] содержимое не совпадает")
     return ok
 
 
@@ -93,7 +93,7 @@ async def find_file_link(
             url = await src_fn(session, q)
             return (url, src_name)
         except Exception as e:
-            logger.warning("[%s] %s → ❌ %s", fmt.upper(), src_name, e)
+            logger.warning("[%s] %s → ERROR %s", fmt.upper(), src_name, e)
             return (None, src_name)
 
     all_tasks = [

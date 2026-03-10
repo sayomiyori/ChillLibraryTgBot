@@ -3,14 +3,14 @@ import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-from messages import RECOMMEND_HEADING, RECOMMEND_ERROR, RECOMMEND_EMPTY, HOW_READ
+from messages import RECOMMEND_HEADING, RECOMMEND_ERROR, RECOMMEND_EMPTY
 from keyboards import main_menu, book_card_short, book_card_how_read
 from config import MAX_RECOMMENDATIONS
 from main import get_session
 from services.gemini import get_similar_books
 from services.search import search_book
 from services.google_books import get_book_by_id
-from handlers.search import BOOK_CACHE, _format_card
+from handlers.search import BOOK_CACHE, _format_card, DESCRIPTION_LIMIT
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -79,15 +79,15 @@ async def open_book(callback: CallbackQuery) -> None:
         return
     BOOK_CACHE[book_id] = (book.title, book.author)
     text = _format_card(book)
+    has_long = len(book.description or "") > DESCRIPTION_LIMIT
     try:
         if book.cover_url:
             await callback.message.answer_photo(
                 photo=book.cover_url,
                 caption=text,
-                reply_markup=book_card_how_read(book_id),
+                reply_markup=book_card_how_read(book_id, has_long_description=has_long),
             )
         else:
-            await callback.message.answer(text, reply_markup=book_card_how_read(book_id))
+            await callback.message.answer(text, reply_markup=book_card_how_read(book_id, has_long_description=has_long))
     except Exception:
-        await callback.message.answer(text, reply_markup=book_card_how_read(book_id))
-    await callback.message.answer(HOW_READ, reply_markup=main_menu())
+        await callback.message.answer(text, reply_markup=book_card_how_read(book_id, has_long_description=has_long))

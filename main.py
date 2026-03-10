@@ -19,13 +19,14 @@ from aiogram.enums import ParseMode
 from aiogram.utils.backoff import BackoffConfig
 
 from config import BOT_TOKEN
+from services.libgen_service import check_available_mirrors
 
 # Ограничиваем backoff при флуд-контроле: макс. задержка 60 сек, не бесконечный рост
 POLLING_BACKOFF = BackoffConfig(min_delay=1.0, max_delay=60.0, factor=1.5, jitter=0.1)
 from database import init_db
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stdout,
 )
@@ -77,6 +78,10 @@ async def on_startup(bot: Bot) -> None:
     )
     _app_session = ClientSession(connector=connector, trust_env=True)
     asyncio.create_task(check_connectivity())
+    try:
+        await check_available_mirrors()
+    except Exception as e:
+        logger.debug("check_available_mirrors: %s", e)
 
 
 async def on_shutdown(bot: Bot) -> None:

@@ -56,33 +56,6 @@
 
 ---
 
-## Подготовка к загрузке в Git
-
-- В репозиторий **не попадают** секреты: `.gitignore` исключает `.env`, `data/`, `*.db`, `TASKS.md`, `PORTFOLIO.md`, отладочные файлы.
-- В репозитории только **`.env.example`** — шаблон переменных без значений. Перед запуском скопируйте в `.env` и заполните ключи локально.
-- Перед `git push` проверьте: `git status` не должен показывать `.env`.
-
----
-
-## Требования и быстрый старт
-
-- **Python 3.11+**
-- Токены и ключи: см. таблицу ниже.
-
-```bash
-git clone https://github.com/sayomiyori/ChillLibraryTgBot.git
-cd ChillLibraryTgBot
-python -m venv .venv
-.venv\Scripts\Activate.ps1   # Windows; на Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-copy .env.example .env       # заполнить .env
-python bot.py
-```
-
-Остановка: `Ctrl+C`.
-
----
-
 ## Переменные окружения
 
 | Переменная         | Описание |
@@ -95,17 +68,6 @@ python bot.py
 | `GOOGLE_CSE_CX`    | (опционально) Custom Search Engine для fallback-поиска файлов. |
 
 Для базовой работы обязательны: **BOT_TOKEN**, **GOOGLE_API_KEY**, **GROQ_API_KEY**.
-
----
-
-## Деплой на Railway
-
-1. [railway.app](https://railway.app) → войти через GitHub → **New Project** → **Deploy from GitHub repo** → выбрать репозиторий.
-2. Сборка: по умолчанию используется **Dockerfile** (`python bot.py`).
-3. Вкладка **Variables** — добавить все ключи из таблицы выше (без значений в репозиторий).
-4. Для long polling порт и домен настраивать не нужно.
-
-База SQLite (`data/`) в контейнере сбрасывается при новом деплое; для постоянных данных — Volume или миграция на PostgreSQL (см. идеи ниже).
 
 ---
 

@@ -34,7 +34,7 @@ from services.models import BookInfo
 from services.book_display import enrich_libgen_book
 from handlers.helpers import safe_answer, safe_answer_photo
 
-SEARCH_TIMEOUT = 30.0
+SEARCH_TIMEOUT = 60.0
 
 router = Router()
 logger = logging.getLogger(__name__)

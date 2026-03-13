@@ -248,6 +248,82 @@ async def search_books_multilang(
     except Exception as e:
         logger.warning("search_books_multilang gather: %s", e)
 
+    # Двухшаговый поиск: если запрос на латинице — получаем кириллическое
+    # название через Google Books с intitle:, затем LibGen по нему.
+    # Отбрасываем биографии, справочники, учебные и языковедческие пособия.
+    if not libgen_ru and title and GOOGLE_API_KEY:
+        has_latin = any(c.isalpha() and ord(c) < 128 for c in title)
+        if has_latin:
+            try:
+                # Используем intitle: чтобы Google Books искал именно эту книгу
+                gb_ru = await search_google_books(
+                    session,
+                    title,
+                    max_results=10,
+                    lang="ru",
+                    use_intitle=True,
+                )
+                logger.info(
+                    "LibGen: двухшаговый поиск, Google Books вернул %s кандидатов для '%s'",
+                    len(gb_ru), title[:50],
+                )
+
+                # Слова-маркеры НЕ-художественной литературы — пропускаем
+                SKIP_WORDS = {
+                    "биограф", "биография", "неофициальн", "путеводитель",
+                    "энциклопедия", "справочник", "раскраска", "комикс",
+                    "кулинар", "рецепт",
+                    "лексическ", "грамматик", "языкознание",
+                    "учебник", "пособие", "курс", "практикум",
+                    "перевод с английского", "перевод с французского",
+                }
+
+                ru_title_to_use = None
+                for candidate in gb_ru:
+                    cand_title = (candidate.title or "").strip()
+                    cand_title_lower = cand_title.lower()
+
+                    # Должна быть кириллица в названии
+                    has_cyrillic = any("\u0400" <= c <= "\u04FF" for c in cand_title)
+                    if not has_cyrillic:
+                        logger.info("LibGen: пропуск '%s' — нет кириллицы", cand_title[:40])
+                        continue
+
+                    # Пропускаем нехудожественные книги
+                    is_skip = any(w in cand_title_lower for w in SKIP_WORDS)
+                    if is_skip:
+                        logger.info("LibGen: пропуск '%s' — маркер нехудожественной", cand_title[:40])
+                        continue
+
+                    # Берём первый подходящий
+                    ru_title_to_use = cand_title
+                    logger.info(
+                        "LibGen: выбран RU кандидат '%s' для запроса '%s'",
+                        ru_title_to_use[:50], title[:50],
+                    )
+                    break
+
+                if ru_title_to_use:
+                    l_res2 = await search_libgen_ru(session, ru_title_to_use)
+                    if l_res2 is not None:
+                        libgen_ru = l_res2
+                        logger.info(
+                            "LibGen: RU книга найдена по переведённому названию '%s'",
+                            ru_title_to_use[:50],
+                        )
+                    else:
+                        logger.info(
+                            "LibGen: LibGen не нашёл книгу по названию '%s'",
+                            ru_title_to_use[:50],
+                        )
+                else:
+                    logger.info(
+                        "LibGen: подходящий RU кандидат не найден для '%s'",
+                        title[:40],
+                    )
+            except Exception as e:
+                logger.warning("Двухшаговый поиск RU: %s", e)
+
     final: list[dict] = []
     if libgen_ru:
         final.append(libgen_ru)

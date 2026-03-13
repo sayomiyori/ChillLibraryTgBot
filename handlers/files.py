@@ -117,10 +117,13 @@ async def how_read(callback: CallbackQuery) -> None:
         formats = await get_download_formats(title, author)
     try:
         if formats:
+            # Всегда показываем все форматы в карточке, даже если заранее
+            # знаем только часть доступных. Реальная проверка наличия формата
+            # происходит в send_format при вызове get_download_formats().
             await _edit_card_message(
                 callback,
                 card_text + "\n\n" + CHOOSE_FORMAT,
-                reply_markup=book_card_formats(book_id, formats),
+                reply_markup=book_card_formats(book_id),
             )
         else:
             await _edit_card_message(
@@ -133,7 +136,7 @@ async def how_read(callback: CallbackQuery) -> None:
             await safe_answer(
                 callback.message,
                 card_text + "\n\n" + CHOOSE_FORMAT,
-                reply_markup=book_card_formats(book_id, formats),
+                reply_markup=book_card_formats(book_id),
             )
         else:
             await safe_answer(
@@ -202,10 +205,9 @@ async def send_format(callback: CallbackQuery) -> None:
     url = formats.get(fmt) or formats.get(fmt.lower()) or formats.get(fmt.upper())
 
     if not url:
-        await status_msg.edit_text(
-            FILE_NOT_FOUND + "\n\n" + FILE_TRY_OTHER,
-            reply_markup=book_card_formats(book_id, formats or None),
-        )
+        # Формат не найден: сообщаем об этом, но не дублируем клавиатуру форматов.
+        # Пользователь выберет другой формат из основной карточки книги.
+        await status_msg.edit_text(FILE_NOT_FOUND)
         return
 
     session = get_session()

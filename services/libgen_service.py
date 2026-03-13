@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from collections import defaultdict
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -35,6 +36,9 @@ LIBGEN_MIRRORS = [
     "https://libgen.buzz",
     "https://libgen.fun",
 ]
+
+# Варианты обозначения русского языка в LibGen (колонка [4])
+RUSSIAN_LANG_VARIANTS = {"russian", "rus", "ru", "рус", "русский"}
 
 # Заполняется при старте бота через check_available_mirrors()
 AVAILABLE_MIRRORS: List[str] = []
@@ -174,6 +178,60 @@ async def _fetch_first_libgen(query: str) -> List[Dict[str, Any]]:
 DOWNLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50 MB — лимит Telegram для send_document
 
 
+def _looks_like_html(content_type: str, data: bytes) -> bool:
+    ct = (content_type or "").lower()
+    if "text/html" in ct or "application/xhtml" in ct:
+        return True
+    head = (data or b"")[:512].lstrip().lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html") or b"<title" in head
+
+
+def _extract_direct_download_url(html: str, base_url: str) -> Optional[str]:
+    """
+    LibGen часто отдаёт HTML-страницу «GET» вместо файла.
+    Извлекаем наиболее вероятную прямую ссылку на файл и возвращаем абсолютный URL.
+    """
+    if not html:
+        return None
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        hrefs = []
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if href:
+                hrefs.append(href)
+    except Exception:
+        hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
+
+    if not hrefs:
+        return None
+
+    def _abs(u: str) -> str:
+        if u.startswith("http://") or u.startswith("https://"):
+            return u
+        if u.startswith("/"):
+            return base_url.rstrip("/") + u
+        return base_url.rstrip("/") + "/" + u
+
+    # Приоритеты: dl.php / get.php / file.php с md5, затем прямые ссылки на файлы
+    patterns = (
+        "dl.php?md5=",
+        "get.php?md5=",
+        "file.php?md5=",
+        "md5=",
+    )
+    for p in patterns:
+        for h in hrefs:
+            if p in h.lower():
+                return _abs(h)
+    for h in hrefs:
+        low = h.lower()
+        if any(low.endswith(ext) for ext in (".fb2", ".epub", ".pdf", ".mobi", ".djvu", ".txt", ".zip")):
+            return _abs(h)
+    return None
+
+
 async def download_book(
     session: Optional[aiohttp.ClientSession],
     download_url: str,
@@ -188,42 +246,61 @@ async def download_book(
     if use_session is None:
         use_session = aiohttp.ClientSession()
     try:
-        async with use_session.get(
-            download_url,
-            timeout=aiohttp.ClientTimeout(total=30),
-            allow_redirects=True,
-        ) as resp:
-            if resp.status != 200:
-                logger.warning("Skachivanie %s: status %s", download_url[:80], resp.status)
-                return None
-            content_length = resp.headers.get("Content-Length")
-            if content_length:
-                try:
-                    size = int(content_length)
-                    if size > DOWNLOAD_MAX_BYTES:
-                        logger.warning("Fajl slishkom bolshoj: %s bajt", content_length)
-                        return None
-                except (ValueError, TypeError):
-                    pass
-            file_bytes = await resp.read()
-            if len(file_bytes) > DOWNLOAD_MAX_BYTES:
-                logger.warning("Fajl slishkom bolshoj: %s bajt", len(file_bytes))
-                return None
-            content_disposition = resp.headers.get("Content-Disposition") or ""
-            if "filename=" in content_disposition:
-                filename = content_disposition.split("filename=")[-1].strip('"\' \t')
-            else:
-                md5 = ""
-                if "md5=" in download_url:
-                    md5 = download_url.split("md5=")[-1].split("&")[0].strip()[:32]
-                filename = f"book_{md5 or 'unknown'}.bin"
-            logger.info("Skachano: %s, razmer: %s bajt", filename[:60], len(file_bytes))
-            return (file_bytes, filename)
+        # 1) Пытаемся скачать напрямую; 2) если пришла HTML-страница — парсим и скачиваем по реальной ссылке
+        url_to_fetch = download_url
+        for attempt in range(2):
+            async with use_session.get(
+                url_to_fetch,
+                timeout=aiohttp.ClientTimeout(total=30),
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; ChillLibraryBot/1.0)"},
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning("Скачивание %s: status %s", url_to_fetch[:80], resp.status)
+                    return None
+
+                content_length = resp.headers.get("Content-Length")
+                if content_length:
+                    try:
+                        size = int(content_length)
+                        if size > DOWNLOAD_MAX_BYTES:
+                            logger.warning("Файл слишком большой: %s байт", content_length)
+                            return None
+                    except (ValueError, TypeError):
+                        pass
+
+                file_bytes = await resp.read()
+                if len(file_bytes) > DOWNLOAD_MAX_BYTES:
+                    logger.warning("Файл слишком большой: %s байт", len(file_bytes))
+                    return None
+
+                content_type = resp.headers.get("Content-Type") or ""
+                if attempt == 0 and _looks_like_html(content_type, file_bytes):
+                    html = file_bytes.decode("utf-8", errors="replace")
+                    base = str(resp.url.origin())
+                    next_url = _extract_direct_download_url(html, base_url=base)
+                    if next_url and next_url != url_to_fetch:
+                        logger.info("LibGen: получена HTML-страница, пробуем прямую ссылку: %s", next_url[:120])
+                        url_to_fetch = next_url
+                        continue
+                    logger.warning("LibGen: получена HTML-страница, но прямая ссылка не найдена")
+                    return None
+
+                content_disposition = resp.headers.get("Content-Disposition") or ""
+                if "filename=" in content_disposition:
+                    filename = content_disposition.split("filename=")[-1].strip('"\' \t')
+                else:
+                    md5 = ""
+                    if "md5=" in url_to_fetch:
+                        md5 = url_to_fetch.split("md5=")[-1].split("&")[0].strip()[:32]
+                    filename = f"book_{md5 or 'unknown'}.bin"
+                logger.info("Скачано: %s, размер: %s байт", filename[:60], len(file_bytes))
+                return (file_bytes, filename)
     except asyncio.TimeoutError:
-        logger.error("Tajmaut skachivaniya: %s", download_url[:80])
+        logger.error("Таймаут скачивания: %s", download_url[:80])
         return None
     except Exception as e:
-        logger.error("Oshibka skachivaniya %s: %s", download_url[:80], e)
+        logger.error("Ошибка скачивания %s: %s", download_url[:80], e)
         return None
     finally:
         if session is None and use_session is not None:
@@ -291,19 +368,29 @@ async def _process_one_row(
         return None
 
     if required_lang and len(cols) > 4:
-        lang_cell = (cols[4].get_text(strip=True) or "").lower()
-        if required_lang.lower() not in lang_cell:
+        lang_cell = (cols[4].get_text(strip=True) or "").lower().strip()
+        is_russian = (
+            lang_cell in RUSSIAN_LANG_VARIANTS
+            or any(v in lang_cell for v in RUSSIAN_LANG_VARIANTS)
+        )
+        if not is_russian:
             return None
 
     title_col = cols[0]
+
+    # Удаляем мусорные теги до любого парсинга
     for tag in title_col.find_all("span", class_="badge"):
         tag.decompose()
     for tag in title_col.find_all("nobr"):
+        tag.decompose()
+    for tag in title_col.find_all("i"):
         tag.decompose()
 
     edition_id = None
     md5 = None
     title = ""
+
+    # Ищем ссылку с edition.php или md5
     for a_tag in title_col.find_all("a", href=True):
         href = a_tag.get("href") or ""
         if "md5=" in href.lower():
@@ -317,20 +404,54 @@ async def _process_one_row(
             title = (a_tag.get_text(strip=True) or "").strip()
             break
 
-    bold = title_col.find("b")
-    if bold:
-        for i in bold.find_all("i"):
-            i.decompose()
-        clean_title = (bold.get_text(strip=True) or "").strip()
-        if clean_title:
-            title = clean_title
+    # Запасной — первая ссылка с кириллицей
+    if not title:
+        for a_tag in title_col.find_all("a", href=True):
+            t = (a_tag.get_text(strip=True) or "").strip()
+            if t and any("\u0400" <= c <= "\u04FF" for c in t):
+                title = t
+                break
+
     if not title and title_col:
         title = (title_col.get_text(strip=True) or "").strip()
+
+    # Агрессивная чистка названия
+    if title:
+        title = title.split(";")[0].strip()
+        title = re.sub(r"\s*\([A-Za-z][^)]*\)\s*$", "", title).strip()
+        title = re.sub(r"\s*№\s*\d+\s*$", "", title).strip()
+        title = re.sub(r"\s*\([^)]{2,30}\)\s*$", "", title).strip()
+        title = re.sub(r"\s*[\(\[]\s*\d+[a-z]?\s*[\)\]]\s*$", "", title).strip()
+        title = re.sub(r"\s*(?:b|f\s*\d+)\s*$", "", title, flags=re.IGNORECASE).strip()
+        title = re.sub(r"\s+", " ", title).strip()
 
     if not edition_id and not md5:
         return None
 
-    author = (cols[1].get_text(strip=True) or "").replace("(Author)", "").strip().rstrip(";").strip()
+    # Автор: убираем переводчиков, редакторов, составителей
+    raw_author = (cols[1].get_text(strip=True) or "").strip()
+    author_parts = raw_author.split(";")
+    main_authors = []
+    SKIP_ROLES = (
+        "translator", "editor", "foreword", "introduction",
+        "illustrator", "compiler", "contributor",
+        "перевод", "редактор", "составитель", "иллюстратор",
+    )
+    for part in author_parts:
+        part = part.strip()
+        if not part:
+            continue
+        if any(role in part.lower() for role in SKIP_ROLES):
+            continue
+        part = re.sub(r"\s*\([^)]+\)\s*$", "", part).strip()
+        if part:
+            main_authors.append(part)
+    if main_authors:
+        author = ", ".join(main_authors[:2])
+    else:
+        fallback = raw_author.split(";")[0].strip()
+        author = re.sub(r"\s*\([^)]+\)\s*$", "", fallback).strip()
+    author = author.replace("(Author)", "").strip().rstrip(";").strip()
     extension = (cols[7].get_text(strip=True) or "").lower().strip()
     if extension not in ALLOWED_EXTENSIONS:
         return None
@@ -365,11 +486,14 @@ async def search_libgen_html(
     if not raw_query:
         return []
 
+    logger.info("LibGen: запрос='%s', зеркало=%s", raw_query[:60], mirror)
+
     try:
         from bs4 import BeautifulSoup
     except ImportError:
         return []
 
+    t0 = time.perf_counter()
     url = f"{mirror.rstrip('/')}/index.php"
     params = {
         "req": raw_query,
@@ -399,8 +523,6 @@ async def search_libgen_html(
         return []
 
     rows = table.find_all("tr")
-    logger.info("LibGen: naydeno strok: %s", len(rows))
-
     base = mirror.rstrip("/")
     sem = asyncio.Semaphore(LIBGEN_ROW_SEMAPHORE)
 
@@ -416,11 +538,96 @@ async def search_libgen_html(
         r for r in raw_results
         if r is not None and not isinstance(r, Exception)
     ]
-    logger.info("LibGen: raspoznano knig: %s", len(results))
+    elapsed = time.perf_counter() - t0
+    logger.info(
+        "LibGen: найдено строк=%s, после фильтра языка=%s, итого книг=%s, время=%.1f с",
+        len(rows), len(results), len(results), elapsed,
+    )
     return results[:5]
 
 
-LIBGEN_RU_MIRROR = "http://libgen.li"
+LIBGEN_RU_MIRRORS = [
+    "http://libgen.is",
+    "http://libgen.st",
+    "http://libgen.rs",
+    "http://libgen.li",
+    "https://libgen.buzz",
+]
+
+
+def _build_ru_queries(title: str) -> list[str]:
+    """
+    Строим список запросов для поиска русского издания.
+    Порядок важен: сначала самые точные запросы.
+    """
+    queries = []
+    title = title.strip()
+
+    # 1. Оригинальный запрос
+    queries.append(title)
+
+    has_latin = any(c.isalpha() and ord(c) < 128 for c in title)
+    has_cyrillic = any("\u0400" <= c <= "\u04FF" for c in title)
+
+    # 2. Если запрос на латинице — пробуем ручной словарь популярных слов
+    # transliterate даёт "Харры" вместо "Гарри" — поэтому используем словарь
+    if has_latin and not has_cyrillic:
+        WORD_MAP = {
+            "harry": "гарри",
+            "potter": "поттер",
+            "hermione": "гермиона",
+            "lord": "властелин",
+            "rings": "колец",
+            "the": "",
+            "of": "",
+            "and": "и",
+            "dune": "дюна",
+            "hobbit": "хоббит",
+            "master": "мастер",
+            "margarita": "маргарита",
+            "war": "война",
+            "peace": "мир",
+            "crime": "преступление",
+            "punishment": "наказание",
+            "foundation": "основание",
+            "solaris": "солярис",
+            "stalker": "сталкер",
+            "brothers": "братья",
+            "karamazov": "карамазовы",
+        }
+        words = title.lower().split()
+        translated = []
+        for w in words:
+            clean = w.strip(".,!?-")
+            if clean in WORD_MAP:
+                mapped = WORD_MAP[clean]
+                if mapped:
+                    translated.append(mapped)
+            else:
+                translated.append(w)
+        ru_title = " ".join(translated).strip()
+        if ru_title and ru_title != title.lower() and any("\u0400" <= c <= "\u04FF" for c in ru_title):
+            queries.append(ru_title)
+
+    # 3. Если запрос на кириллице — добавляем транслит ru→en
+    if has_cyrillic:
+        try:
+            from transliterate import translit
+            title_en = translit(title, "ru", reversed=True)
+            if title_en and title_en != title:
+                queries.append(title_en)
+        except Exception:
+            pass
+
+    # Уникальные непустые
+    seen = set()
+    result = []
+    for q in queries:
+        q = q.strip()
+        if q and q not in seen:
+            seen.add(q)
+            result.append(q)
+    return result
 
 
 async def search_libgen_ru(
@@ -429,31 +636,95 @@ async def search_libgen_ru(
 ) -> Optional[Dict[str, Any]]:
     """
     Ищет лучшее русское издание книги на LibGen.
+    Параллельно опрашивает все зеркала для каждого варианта запроса.
     Возвращает один dict в формате карточки книги (zone=RU) или None.
     """
     title = (title or "").strip()
     if not title:
         return None
 
-    results = await search_libgen_html(
-        session, title, LIBGEN_RU_MIRROR, required_lang="Russian",
+    mirrors = AVAILABLE_MIRRORS if AVAILABLE_MIRRORS else LIBGEN_RU_MIRRORS
+    queries = _build_ru_queries(title)
+
+    logger.info(
+        "LibGen RU: ищем '%s', зеркал=%s, вариантов запроса=%s: %s",
+        title[:40], len(mirrors), len(queries), queries,
     )
-    if not results:
+
+    async def try_mirror(query: str, mirror: str) -> Optional[list]:
         try:
-            from transliterate import translit
-            title_translit = translit(title, "ru", reversed=True)
-            if title_translit and title_translit != title:
-                results = await search_libgen_html(
-                    session, title_translit, LIBGEN_RU_MIRROR, required_lang="Russian",
+            found = await search_libgen_html(
+                session, query, mirror, required_lang="russian",
+            )
+            if found:
+                logger.info(
+                    "LibGen RU: зеркало '%s' вернуло %s результатов для '%s'",
+                    mirror, len(found), query[:50],
                 )
-        except Exception:
-            pass
+            return found or None
+        except Exception as e:
+            logger.debug("LibGen RU: зеркало '%s' ошибка: %s", mirror, e)
+            return None
+
+    results: list[Dict[str, Any]] = []
+
+    # Перебираем запросы по очереди, но каждый запрос — параллельно по всем зеркалам
+    for query in queries:
+        tasks = [asyncio.create_task(try_mirror(query, m)) for m in mirrors]
+        try:
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    found = await asyncio.wait_for(coro, timeout=HTML_SEARCH_TIMEOUT + 1)
+                    if found:
+                        results = found
+                        # Отменяем остальные задачи
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        break
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    continue
+                except Exception:
+                    continue
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
+        if results:
+            break
 
     if not results:
-        logger.warning("LibGen RU: nichego ne najdeno dlya '%s'", title[:50])
+        logger.warning(
+            "LibGen RU: ничего не найдено для '%s' (зеркал=%s, запросов=%s)",
+            title[:50], len(mirrors), len(queries),
+        )
         return None
 
-    best = results[0]
+    # Универсальный выбор лучшей книги по названию:
+    # 1) если есть издания, где присутствуют ВСЕ значимые слова запроса —
+    #    выбираем среди них;
+    # 2) иначе считаем, сколько значимых слов из запроса присутствует в названии;
+    #    при равенстве — берём с максимальным SequenceMatcher score.
+    query_lower = title.lower()
+    words = [w for w in re.split(r"\W+", query_lower) if len(w) >= 3]
+
+    # Книги, где встречаются все слова запроса
+    exact: list[Dict[str, Any]] = []
+    for item in results:
+        name = (item.get("title") or "").lower()
+        if words and all(w in name for w in words):
+            exact.append(item)
+
+    base_list = exact or results
+
+    def _score(item: Dict[str, Any]) -> tuple[int, float]:
+        name = (item.get("title") or "").lower()
+        present = sum(1 for w in words if w and w in name)
+        sim = SequenceMatcher(None, query_lower, name).ratio()
+        return present, sim
+
+    best = max(base_list, key=_score)
     md5 = best.get("md5") or ""
     ext = (best.get("extension") or "").lower()
     download_url = best.get("download_url") or ""
@@ -624,25 +895,31 @@ async def search_libgen_fiction(
 
 async def check_available_mirrors() -> List[str]:
     """
-    При старте бота проверить, какие зеркала доступны (обход DNS/сетевых ограничений Railway).
-    Возвращает список URL доступных зеркал. Результат сохраняется в AVAILABLE_MIRRORS.
+    При старте бота проверить, какие зеркала доступны.
+    Проверяем все зеркала включая RU-специфичные.
+    Результат сохраняется в AVAILABLE_MIRRORS.
     """
     global AVAILABLE_MIRRORS
+    all_mirrors = list(dict.fromkeys(LIBGEN_MIRRORS + LIBGEN_RU_MIRRORS))
     available: List[str] = []
     timeout = aiohttp.ClientTimeout(total=MIRROR_CHECK_TIMEOUT)
     async with aiohttp.ClientSession() as session:
-        for base in LIBGEN_MIRRORS:
-            url = f"{base.rstrip('/')}/json.php?title=test&fields=id"
+        for base in all_mirrors:
+            url = f"{base.rstrip('/')}/index.php?req=test&res=1"
             try:
                 async with session.get(url, timeout=timeout) as resp:
                     if resp.status < 500:
                         available.append(base)
-                        logger.info("Zerkalo dostupno: %s", base)
+                        logger.info("Зеркало доступно: %s (status=%s)", base, resp.status)
                     else:
-                        logger.warning("Zerkalo nedostupno: %s (status=%s)", base, resp.status)
+                        logger.warning("Зеркало недоступно: %s (status=%s)", base, resp.status)
             except Exception as e:
-                logger.warning("Zerkalo nedostupno: %s (%s)", base, e)
+                logger.warning("Зеркало недоступно: %s (%s)", base, e)
     AVAILABLE_MIRRORS[:] = available
+    logger.info(
+        "LibGen: доступно зеркал %s из %s: %s",
+        len(available), len(all_mirrors), available,
+    )
     return available
 
 
@@ -762,13 +1039,7 @@ async def search_open_library_formats(title: str, author: str = "") -> Dict[str,
 
     docs = data.get("docs") or []
     for doc in docs[:5]:
-        # Сначала пробуем Internet Archive ID — epub на archive.org
-        ia_ids = doc.get("ia") or []
-        if ia_ids:
-            archive_id = ia_ids[0]
-            if archive_id:
-                formats["epub"] = f"https://archive.org/download/{archive_id}/{archive_id}.epub"
-                break
+        # Используем только прямые ссылки Open Library на epub по edition_key.
         edition_keys = doc.get("edition_key") or []
         for key in edition_keys[:1]:
             if not key:

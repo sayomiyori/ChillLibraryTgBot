@@ -47,7 +47,11 @@ def get_cached_link(title: str, author: str, format: str) -> Optional[str]:
                 data = json.load(f)
             expires = data.get("expires", 0)
             if time.time() < expires:
-                return data.get("url")
+                url = data.get("url")
+                # Promote to L1 cache for faster subsequent lookups
+                if url:
+                    _L1[key] = (url, expires)
+                return url
             path.unlink(missing_ok=True)
         except Exception as e:
             logger.debug("Cache read %s: %s", key, e)

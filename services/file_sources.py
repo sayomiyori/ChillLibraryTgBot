@@ -204,28 +204,20 @@ async def _parse_source(
     source_name: str,
     query: str,
 ) -> Optional[str]:
-    """Парсит одну запись из SOURCES_CONFIG; логирует и сохраняет HTML для отладки."""
+    """Парсит одну запись из SOURCES_CONFIG."""
     url = config["url"].replace("{query}", quote(query, safe=""))
     html, status, err = await _fetch_html(session, url)
     if not html:
         status_str = str(status) if status else "—"
         err_str = (err or "—").strip()[:80]
-        # Без emoji, чтобы не падать на консольной кодировке cp1251 в Windows
         logger.warning(
-            "[%s] ERROR страница не загрузилась | status=%s | %s | %s",
+            "[%s] страница не загрузилась | status=%s | %s | %s",
             source_name,
             status_str,
             err_str,
             url[:50],
         )
         return None
-    debug_path = f"debug_{source_name}.html"
-    try:
-        with open(debug_path, "w", encoding="utf-8") as f:
-            f.write(html)
-        logger.info("[%s] HTML сохранён в %s (%s байт)", source_name, debug_path, len(html))
-    except OSError as e:
-        logger.debug("[%s] не удалось сохранить HTML: %s", source_name, e)
     soup = BeautifulSoup(html, "lxml")
     base = config.get("base_url", "")
     query_lower = query.lower()

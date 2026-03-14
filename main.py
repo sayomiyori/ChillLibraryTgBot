@@ -26,7 +26,7 @@ POLLING_BACKOFF = BackoffConfig(min_delay=1.0, max_delay=60.0, factor=1.5, jitte
 from database import init_db
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stdout,
 )

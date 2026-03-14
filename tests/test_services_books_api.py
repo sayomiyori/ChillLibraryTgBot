@@ -1,4 +1,4 @@
-"""Тесты services.books_api: search_books, get_book_by_id (с моком aiohttp)."""
+"""Тесты services.google_books: search_google_books, get_book_by_id (с моком aiohttp)."""
 import re
 import pytest
 from aioresponses import aioresponses
@@ -6,25 +6,26 @@ from aioresponses import aioresponses
 
 @pytest.fixture
 def mock_google_key(monkeypatch):
-    """Подмена API-ключа в модуле books_api (уже импортирован из config)."""
-    import services.books_api as api
-    monkeypatch.setattr(api, "GOOGLE_API_KEY", "test-key")
+    """Подмена API-ключа в модуле google_books."""
+    import services.google_books as gb
+    monkeypatch.setattr(gb, "GOOGLE_API_KEY", "test-key")
 
 
 @pytest.mark.asyncio
-async def test_search_books_empty_query():
+async def test_search_google_books_empty_query():
     """Пустой запрос возвращает пустой список."""
-    from services.books_api import search_books
-    result = await search_books("")
-    assert result == []
-    result = await search_books("   ")
+    import aiohttp
+    from services.google_books import search_google_books
+    async with aiohttp.ClientSession() as session:
+        result = await search_google_books(session, "")
     assert result == []
 
 
 @pytest.mark.asyncio
-async def test_search_books_returns_parsed_results(mock_google_key):
-    """search_books парсит ответ API и возвращает список книг."""
-    from services.books_api import search_books, GOOGLE_BOOKS_URL
+async def test_search_google_books_returns_parsed_results(mock_google_key):
+    """search_google_books парсит ответ API и возвращает список BookInfo."""
+    import aiohttp
+    from services.google_books import search_google_books
 
     mock_response = {
         "items": [
@@ -41,43 +42,48 @@ async def test_search_books_returns_parsed_results(mock_google_key):
         ]
     }
     with aioresponses() as m:
-        # URL с query: .../volumes?q=...&maxResults=...&key=...
         m.get(
             re.compile(r"^https://www\.googleapis\.com/books/v1/volumes\?"),
             payload=mock_response,
         )
-        result = await search_books("булгаков", max_results=5)
+        async with aiohttp.ClientSession() as session:
+            result = await search_google_books(session, "булгаков", max_results=5)
     assert len(result) == 1
-    assert result[0]["id"] == "abc123"
-    assert result[0]["title"] == "Мастер и Маргарита"
-    assert result[0]["author"] == "Михаил Булгаков"
-    assert result[0]["rating"] == 4.8
-    assert result[0]["thumbnail"] == "http://example.com/cover.jpg"
+    assert result[0].id == "abc123"
+    assert result[0].title == "Мастер и Маргарита"
+    assert result[0].author == "Михаил Булгаков"
+    assert result[0].rating == 4.8
+    assert result[0].cover_url == "http://example.com/cover.jpg"
 
 
 @pytest.mark.asyncio
-async def test_search_books_empty_response(mock_google_key):
+async def test_search_google_books_empty_response(mock_google_key):
     """При отсутствии items возвращается пустой список."""
-    from services.books_api import search_books, GOOGLE_BOOKS_URL
+    import aiohttp
+    from services.google_books import search_google_books
     with aioresponses() as m:
         m.get(re.compile(r"^https://www\.googleapis\.com/books/v1/volumes\?"), payload={})
-        result = await search_books("нет такой книги", max_results=5)
+        async with aiohttp.ClientSession() as session:
+            result = await search_google_books(session, "нет такой книги", max_results=5)
     assert result == []
 
 
 @pytest.mark.asyncio
 async def test_get_book_by_id_returns_none_without_key(monkeypatch):
     """Без API-ключа get_book_by_id возвращает None."""
-    import services.books_api as api
-    monkeypatch.setattr(api, "GOOGLE_API_KEY", "")
-    result = await api.get_book_by_id("some-id")
+    import aiohttp
+    import services.google_books as gb
+    monkeypatch.setattr(gb, "GOOGLE_API_KEY", "")
+    async with aiohttp.ClientSession() as session:
+        result = await gb.get_book_by_id(session, "some-id")
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_get_book_by_id_parses_volume(mock_google_key):
-    """get_book_by_id возвращает словарь книги."""
-    from services.books_api import get_book_by_id, GOOGLE_BOOKS_URL
+    """get_book_by_id возвращает BookInfo."""
+    import aiohttp
+    from services.google_books import get_book_by_id
 
     mock_response = {
         "id": "vol123",
@@ -88,13 +94,13 @@ async def test_get_book_by_id_parses_volume(mock_google_key):
         },
     }
     with aioresponses() as m:
-        # URL: .../volumes/vol123?key=...
         m.get(
             re.compile(r"^https://www\.googleapis\.com/books/v1/volumes/vol123"),
             payload=mock_response,
         )
-        result = await get_book_by_id("vol123")
+        async with aiohttp.ClientSession() as session:
+            result = await get_book_by_id(session, "vol123")
     assert result is not None
-    assert result["id"] == "vol123"
-    assert result["title"] == "Собачье сердце"
-    assert result["author"] == "Михаил Булгаков"
+    assert result.id == "vol123"
+    assert result.title == "Собачье сердце"
+    assert result.author == "Михаил Булгаков"

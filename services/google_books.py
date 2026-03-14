@@ -70,9 +70,14 @@ async def search_google_books(
         title = vol.get("title", "Без названия")
         authors_list = vol.get("authors") or []
         author = ", ".join(authors_list) if authors_list else "Неизвестный автор"
-        desc = (vol.get("description") or "")[:500]
-        if len(vol.get("description") or "") > 500:
+        raw_desc = vol.get("description") or ""
+        if len(raw_desc) > 500:
+            desc = raw_desc[:500]
+            if " " in desc:
+                desc = desc.rsplit(" ", 1)[0]
             desc += "…"
+        else:
+            desc = raw_desc
         image_links = vol.get("imageLinks") or {}
         cover_url = image_links.get("thumbnail") or image_links.get("smallThumbnail") or ""
         rating = vol.get("averageRating")
@@ -128,9 +133,14 @@ async def get_book_by_id(
     vol = data.get("volumeInfo") or {}
     authors_list = vol.get("authors") or []
     author = ", ".join(authors_list) if authors_list else "Неизвестный автор"
-    desc = (vol.get("description") or "")[:500]
-    if len(vol.get("description") or "") > 500:
+    raw_desc = vol.get("description") or ""
+    if len(raw_desc) > 500:
+        desc = raw_desc[:500]
+        if " " in desc:
+            desc = desc.rsplit(" ", 1)[0]
         desc += "…"
+    else:
+        desc = raw_desc
     image_links = vol.get("imageLinks") or {}
     cover_url = image_links.get("thumbnail") or image_links.get("smallThumbnail") or ""
     rating = vol.get("averageRating")

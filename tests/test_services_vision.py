@@ -1,50 +1,50 @@
-"""Тесты services.vision: get_text_from_image (мок Vision API)."""
-import base64
+"""Тесты services.vision: recognize_cover, _get_text_from_image, _parse_title_author_from_text."""
 import pytest
-from aioresponses import aioresponses
+from unittest.mock import AsyncMock, patch
 
 
-@pytest.fixture
-def mock_google_key(monkeypatch):
-    import services.vision as vision
-    monkeypatch.setattr(vision, "GOOGLE_API_KEY", "test-vision-key")
+def test_parse_title_author_from_text():
+    """Эвристика парсинга текста обложки: первая строка — название, вторая — автор."""
+    from services.vision import _parse_title_author_from_text
+
+    result = _parse_title_author_from_text("Мастер и Маргарита\nМихаил Булгаков")
+    assert result is not None
+    assert result["title"] == "Мастер и Маргарита"
+    assert result["author"] == "Михаил Булгаков"
 
 
-@pytest.mark.asyncio
-async def test_get_text_from_image_returns_none_without_key(monkeypatch):
-    """Без API-ключа возвращается None."""
-    import services.vision as vision
-    monkeypatch.setattr(vision, "GOOGLE_API_KEY", "")
-    result = await vision.get_text_from_image(b"\x00\x01")
-    assert result is None
+def test_parse_title_author_from_text_with_dash():
+    """Если в первой строке есть ' — ', разбиваем на title и author."""
+    from services.vision import _parse_title_author_from_text
+
+    result = _parse_title_author_from_text("Мастер и Маргарита — Михаил Булгаков")
+    assert result is not None
+    assert result["title"] == "Мастер и Маргарита"
+    assert result["author"] == "Михаил Булгаков"
 
 
-@pytest.mark.asyncio
-async def test_get_text_from_image_parses_full_text_annotation(mock_google_key):
-    """Парсинг fullTextAnnotation.text."""
-    from services.vision import get_text_from_image, VISION_URL
+def test_parse_title_author_from_empty_text():
+    """Пустой текст — None."""
+    from services.vision import _parse_title_author_from_text
 
-    mock_response = {
-        "responses": [
-            {
-                "fullTextAnnotation": {
-                    "text": "Мастер и Маргарита\nМихаил Булгаков",
-                }
-            }
-        ]
-    }
-    with aioresponses() as m:
-        m.post(
-            f"{VISION_URL}?key=test-vision-key",
-            payload=mock_response,
-        )
-        result = await get_text_from_image(b"fake image bytes")
-    assert result == "Мастер и Маргарита\nМихаил Булгаков"
+    assert _parse_title_author_from_text("") is None
+    assert _parse_title_author_from_text("  ") is None
+    assert _parse_title_author_from_text(None) is None
 
 
 @pytest.mark.asyncio
-async def test_get_text_from_image_empty_bytes_returns_none(mock_google_key):
-    """Пустое изображение — None."""
-    from services.vision import get_text_from_image
-    result = await get_text_from_image(b"")
+async def test_get_text_from_image_empty_bytes():
+    """Пустое изображение — пустая строка."""
+    from services.vision import _get_text_from_image
+
+    result = await _get_text_from_image(b"")
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_recognize_cover_returns_none_on_empty_data():
+    """Пустые байты — None."""
+    from services.vision import recognize_cover
+
+    result = await recognize_cover(b"")
     assert result is None

@@ -149,26 +149,26 @@ async def _fetch_first_libgen(query: str) -> List[Dict[str, Any]]:
 
     mirrors = _get_mirrors_to_use()
 
-    async def fetch_one(base: str) -> List[Dict[str, Any]]:
-        async with aiohttp.ClientSession() as session:
-            return await _libgen_json_one(session, base, query)
+    async def fetch_one(session: aiohttp.ClientSession, base: str) -> List[Dict[str, Any]]:
+        return await _libgen_json_one(session, base, query)
 
-    tasks = [asyncio.create_task(fetch_one(base)) for base in mirrors]
-    try:
-        for coro in asyncio.as_completed(tasks):
-            try:
-                result = await asyncio.wait_for(coro, timeout=REQUEST_TIMEOUT + 0.5)
-                if result:
-                    for t in tasks:
-                        if not t.done():
-                            t.cancel()
-                    return result
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                continue
-    finally:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
+    async with aiohttp.ClientSession() as session:
+        tasks = [asyncio.create_task(fetch_one(session, base)) for base in mirrors]
+        try:
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await asyncio.wait_for(coro, timeout=REQUEST_TIMEOUT + 0.5)
+                    if result:
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        return result
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    continue
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
     logger.error("LibGen: все зеркала недоступны для запроса '%s'", query[:50])
     return []
 
@@ -337,14 +337,14 @@ async def get_md5_by_edition_id(
             if "get.php?md5=" in href:
                 md5 = href.split("md5=")[-1].split("&")[0].strip()
                 if len(md5) == 32:
-                    logger.info("LibGen: md5 dlya edition %s: %s", edition_id, md5)
+                    logger.info("LibGen: md5 for edition %s: %s", edition_id, md5)
                     return md5
     except Exception:
         pass
 
     matches = re.findall(r"\b([a-fA-F0-9]{32})\b", html)
     if matches:
-        logger.info("LibGen: md5 iz HTML stranicy edition %s: %s", edition_id, matches[0])
+        logger.info("LibGen: md5 from HTML page edition %s: %s", edition_id, matches[0])
         return matches[0]
 
     logger.debug("LibGen edition %s HTML (pervye 1000):\n%s", edition_id, html[:1000])
@@ -848,7 +848,7 @@ async def search_libgen_fiction(
         "language": "Russian",
         "format": "",
     }
-    logger.info("LibGen fiction zapros: %s params=%s", url, params)
+    logger.info("LibGen fiction: %s params=%s", url, params)
     try:
         async with session.get(
             url,
@@ -866,10 +866,7 @@ async def search_libgen_fiction(
         status,
         len(html),
     )
-    logger.debug(
-        "LibGen fiction HTML (pervye 2000 simvolov):\n%s",
-        html[:2000],
-    )
+    logger.debug("LibGen fiction HTML (2000 chars):\n%s", html[:2000])
 
     try:
         from bs4 import BeautifulSoup
@@ -878,15 +875,12 @@ async def search_libgen_fiction(
 
     soup = BeautifulSoup(html, "lxml")
     tables = soup.find_all("table")
-    logger.debug("LibGen fiction: naydeno tablic: %s", len(tables))
+    logger.debug("LibGen fiction: tables found: %s", len(tables))
     for i, t in enumerate(tables):
         rows = len(t.find_all("tr"))
         logger.debug(
-            "Fiction tablica %s: id=%s class=%s, strok=%s",
-            i,
-            t.get("id"),
-            t.get("class"),
-            rows,
+            "Fiction table %s: id=%s class=%s, rows=%s",
+            i, t.get("id"), t.get("class"), rows,
         )
 
     # Пока возвращаем пустой список — парсер будет доработан после анализа логов
@@ -901,20 +895,26 @@ async def check_available_mirrors() -> List[str]:
     """
     global AVAILABLE_MIRRORS
     all_mirrors = list(dict.fromkeys(LIBGEN_MIRRORS + LIBGEN_RU_MIRRORS))
-    available: List[str] = []
     timeout = aiohttp.ClientTimeout(total=MIRROR_CHECK_TIMEOUT)
+
+    async def _check_one(session: aiohttp.ClientSession, base: str) -> Optional[str]:
+        url = f"{base.rstrip('/')}/index.php?req=test&res=1"
+        try:
+            async with session.get(url, timeout=timeout) as resp:
+                if resp.status < 500:
+                    logger.info("Mirror OK: %s (status=%s)", base, resp.status)
+                    return base
+                logger.warning("Mirror unavailable: %s (status=%s)", base, resp.status)
+        except Exception as e:
+            logger.warning("Mirror unavailable: %s (%s)", base, e)
+        return None
+
     async with aiohttp.ClientSession() as session:
-        for base in all_mirrors:
-            url = f"{base.rstrip('/')}/index.php?req=test&res=1"
-            try:
-                async with session.get(url, timeout=timeout) as resp:
-                    if resp.status < 500:
-                        available.append(base)
-                        logger.info("Зеркало доступно: %s (status=%s)", base, resp.status)
-                    else:
-                        logger.warning("Зеркало недоступно: %s (status=%s)", base, resp.status)
-            except Exception as e:
-                logger.warning("Зеркало недоступно: %s (%s)", base, e)
+        results = await asyncio.gather(
+            *[_check_one(session, base) for base in all_mirrors],
+            return_exceptions=True,
+        )
+    available = [r for r in results if isinstance(r, str)]
     AVAILABLE_MIRRORS[:] = available
     logger.info(
         "LibGen: доступно зеркал %s из %s: %s",
@@ -1128,7 +1128,7 @@ async def get_download_formats(title: str, author: str) -> Dict[str, str]:
                                 formats[ext] = item.get("download_url") or ""
                         if formats:
                             logger.info(
-                                "LibGen nashol dlya '%s': %s",
+                                "LibGen found for '%s': %s",
                                 q[:50],
                                 list(formats.keys()),
                             )
@@ -1141,14 +1141,14 @@ async def get_download_formats(title: str, author: str) -> Dict[str, str]:
         ol = await search_open_library_formats(title, author)
         if ol.get("epub"):
             formats["epub"] = ol["epub"]
-            logger.info("Open Library nashol epub dlya '%s'", (title or "")[:40])
+            logger.info("Open Library found epub for '%s'", (title or "")[:40])
 
     # 4. Gutenberg (epub)
     if "epub" not in formats:
         gb = await search_gutenberg_formats(title, author)
         if gb.get("epub"):
             formats["epub"] = gb["epub"]
-            logger.info("LibGen: epub poluchen cherez Gutenberg")
+            logger.info("LibGen: epub from Gutenberg")
 
-    logger.info("Itogo formatov dlya '%s': %s", (title or query)[:50], formats)
+    logger.info("Total formats for '%s': %s", (title or query)[:50], formats)
     return formats

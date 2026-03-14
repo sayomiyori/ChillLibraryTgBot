@@ -68,7 +68,11 @@ def _format_card(book: BookInfo, description_limit: int | None = DESCRIPTION_LIM
     if book.description:
         raw = book.description
         if description_limit is not None and len(raw) > description_limit:
-            short = raw[:description_limit].rsplit(" ", 1)[0] + "..."
+            truncated = raw[:description_limit]
+            # Обрезка по границе слова (если есть пробел)
+            if " " in truncated:
+                truncated = truncated.rsplit(" ", 1)[0]
+            short = truncated + "..."
         else:
             short = raw
         lines.append(CARD_DESC.format(short))

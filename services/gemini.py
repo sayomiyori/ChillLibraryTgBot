@@ -138,7 +138,7 @@ SIMILAR_PROMPT = """Пользователь прочитал книгу: «{tit
 
 def _get_similar_books_sync(title: str, author: str, limit: int, genre: str = "") -> list[dict]:
     """Синхронный вызов Gemini для списка похожих книг (с учётом жанра)."""
-    if not title and not author or not GEMINI_API_KEY:
+    if (not title and not author) or not GEMINI_API_KEY:
         return []
     try:
         import google.generativeai as genai

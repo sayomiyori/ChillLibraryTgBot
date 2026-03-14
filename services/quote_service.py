@@ -145,6 +145,9 @@ async def _cross_check_quote(client, quote: str, book_title: str, author: str) -
         logger.debug("find_by_quote cross_check: %s", e)
         return True  # при ошибке проверки не отбрасываем результат
     text = (response.choices[0].message.content or "").strip().upper()
-    if "NO" in text and "YES" not in text:
+    # Strict match: only reject if the entire response is "NO"/"НЕТ",
+    # not a substring (e.g. "NO" should not match "KNOWN" or "WONDERFUL")
+    cleaned = text.strip().rstrip(".")
+    if cleaned in ("NO", "НЕТ"):
         return False
     return True
